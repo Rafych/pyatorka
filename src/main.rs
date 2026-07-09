@@ -127,7 +127,7 @@ struct FileSlot {
     visible: bool,
     opacity: f32,
     scale: f32,
-    gen: u64,
+    r#gen: u64,
     encoding_choice: Option<usize>,
 }
 
@@ -140,7 +140,7 @@ impl FileSlot {
             visible: true,
             opacity: 1.0,
             scale: 1.0,
-            gen: 0,
+            r#gen: 0,
             encoding_choice: None,
         }
     }
@@ -279,8 +279,8 @@ impl App {
                 let key = (
                     self.slot_a.scale.to_bits(),
                     self.slot_b.scale.to_bits(),
-                    self.slot_a.gen,
-                    self.slot_b.gen,
+                    self.slot_a.r#gen,
+                    self.slot_b.r#gen,
                 );
                 if self.diff_cache_key != Some(key) {
                     let dragging = ctx.input(|i| i.pointer.any_down());
@@ -339,7 +339,7 @@ impl App {
                 };
                 slot.path = Some(path.display().to_string());
                 slot.geo = Some(geo);
-                slot.gen = slot.gen.wrapping_add(1);
+                slot.r#gen = slot.r#gen.wrapping_add(1);
                 self.error = None;
                 self.pending_encoding = None;
                 self.needs_fit = true;
