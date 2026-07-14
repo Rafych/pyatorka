@@ -101,17 +101,17 @@ fn setup_fonts(ctx: &egui::Context) {
         .families
         .get_mut(&egui::FontFamily::Proportional)
         .unwrap();
-    proportional.insert(0, "font_ja".to_owned());
-    proportional.insert(1, "font_ru".to_owned());
-    proportional.insert(2, "font_en".to_owned());
+    proportional.insert(0, "font_ru".to_owned());
+    proportional.insert(1, "font_en".to_owned());
+    proportional.insert(2, "font_ja".to_owned());
 
     let monospace = fonts
         .families
         .get_mut(&egui::FontFamily::Monospace)
         .unwrap();
-    monospace.push("font_ja".to_owned());
     monospace.push("font_ru".to_owned());
     monospace.push("font_en".to_owned());
+    monospace.push("font_ja".to_owned());
 
     ctx.set_fonts(fonts);
 }
