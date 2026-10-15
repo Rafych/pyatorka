@@ -6,16 +6,33 @@ description = "Пятёрка — просмотрщик наложения DXF-
 authors = ["Rafych"]
 
 [dependencies]
-eframe = { version = "0.27", features = ["persistence"] }
-egui = "0.27"
-dxf = "0.5"
-rfd = "0.14"
+# Отрисовка через OpenGL (glow), как и раньше: в eframe 0.36 по умолчанию включён
+# wgpu, с которым полупрозрачные элементы (подсветка различий и т.п.) смешиваются иначе.
+eframe = { version = "0.36", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "glow",
+    "links",
+    "persistence",
+    "wayland",
+    "web_screen_reader",
+    "x11",
+] }
+egui = "0.36"
+dxf = "0.6"
+rfd = "0.17"
 # Используется для автоопределения кодировки текста в теле DXF-файла
 # (интерпретация $DWGCODEPAGE, определение Shift_JIS и т.п.)
 encoding_rs = "0.8"
-chardetng = "0.1"
+chardetng = "1"
 serde = { version = "1", features = ["derive"] }
-image = { version = "0.24", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Используется, чтобы отключить системную тень/рамку Windows у окна без рамки
+# (иначе она рисуется поверх собственных скруглённых углов окна).
+# Версия должна совпадать с той, что использует eframe.
+[target.'cfg(windows)'.dependencies]
+winit = { version = "0.30", default-features = false }
 
 # Используется для встраивания значка самого исполняемого файла Windows
 # (отображается в проводнике). На сборку под другие платформы не влияет.

@@ -54,12 +54,12 @@ fn path_literal(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "\\\\")
 }
 
-// Генерирует fonts_generated.rs с константами FONT_JA / FONT_RU / FONT_EN.
+// Генерирует fonts_generated.rs с константами FONT_EN / FONT_RU / FONT_JA.
 // Если несколько языков используют один и тот же файл (например, все три
 // попадают на general.ttf), файл встраивается только один раз —
 // остальные константы лишь ссылаются на уже встроенные байты.
 fn generate_font_bindings(out_dir: &str) {
-    let langs = ["ja", "ru", "en"];
+    let langs = ["en", "ru", "ja"];
     let paths: Vec<PathBuf> = langs.iter().map(|l| resolve_font_path(l)).collect();
 
     let mut unique_paths: Vec<PathBuf> = Vec::new();
@@ -79,7 +79,7 @@ fn generate_font_bindings(out_dir: &str) {
     }
     code.push('\n');
 
-    let const_names = ["FONT_JA", "FONT_RU", "FONT_EN"];
+    let const_names = ["FONT_EN", "FONT_RU", "FONT_JA"];
     for (lang_path, const_name) in paths.iter().zip(const_names.iter()) {
         let idx = unique_paths.iter().position(|p| p == lang_path).unwrap();
         code.push_str(&format!(
