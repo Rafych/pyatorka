@@ -1,16 +1,24 @@
+// В релизной сборке под Windows не открывать окно консоли. Атрибут может стоять
+// только в корне крейта, поэтому он здесь, а не в platform.rs; на других
+// системах он ни на что не влияет.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 // Точка входа приложения Пятёрка: окно, состояние, отрисовка и обработчики UI.
+// Код одинаков для Windows и Linux; всё, что зависит от ОС, — в модуле platform.
 mod diff;
 mod encoding;
+mod file_picker;
 mod geometry;
 mod i18n;
+mod platform;
+mod renderer;
+mod startup;
 mod style;
 
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 use geometry::{Geometry, TextStyle};
-use i18n::{t, Lang};
+use i18n::{Lang, t};
 
 // Рисует текст заданного пиксельного размера и возвращает его ограничивающий прямоугольник
 // (нужен вызывающему коду для последующей отрисовки подчёркивания/зачёркивания).
@@ -181,9 +189,13 @@ struct App {
     diff_cache: Option<diff::DiffResult>,
     diff_cache_key: Option<(u32, u32, u64, u64)>,
     pending_encoding: Option<PendingEncoding>,
+    // Встроенный обзор файлов, если системный диалог выбора недоступен.
+    file_picker: Option<file_picker::FilePicker>,
     scale_slider_dragging: bool,
     subtitle_width_cache: Option<(Lang, f32)>,
-    native_shadow_disabled: bool,
+    window_configured: bool,
+    // Фактический способ отрисовки (GPU или CPU), определяется в первом кадре.
+    render_info: Option<renderer::RenderInfo>,
 }
 
 // Ошибка загрузки файла, показываемая в модальном окне.
@@ -220,9 +232,11 @@ impl Default for App {
             diff_cache: None,
             diff_cache_key: None,
             pending_encoding: None,
+            file_picker: None,
             scale_slider_dragging: false,
             subtitle_width_cache: None,
-            native_shadow_disabled: false,
+            window_configured: false,
+            render_info: None,
         }
     }
 }
@@ -329,18 +343,44 @@ impl App {
     }
 
     // Открывает системный диалог выбора DXF-файла и загружает выбранный файл в слот.
+    // Если системный диалог недоступен, открывается встроенный обзор файлов.
     fn open_dialog(
         &mut self,
         slot_index: usize,
         forced_encoding: Option<&'static encoding_rs::Encoding>,
     ) {
-        if let Some(path) = rfd::FileDialog::new()
+        file_picker::reset_native_dialog_failure();
+        let picked = rfd::FileDialog::new()
             .add_filter("DXF", &["dxf", "DXF"])
             .set_title(t(self.lang, "select_file_title"))
-            .pick_file()
-        {
-            self.load_path_into_slot(path, slot_index, forced_encoding);
+            .pick_file();
+        match picked {
+            Some(path) => self.load_path_into_slot(path, slot_index, forced_encoding),
+            None if file_picker::native_dialog_failed() => {
+                self.file_picker = Some(file_picker::FilePicker::new(
+                    slot_index,
+                    forced_encoding,
+                    self.picker_start_dir(slot_index),
+                ));
+            }
+            None => {}
         }
+    }
+
+    // Папка, с которой начинается встроенный обзор файлов: папка уже открытого
+    // в этом слоте файла, иначе — папка файла из другого слота.
+    fn picker_start_dir(&self, slot_index: usize) -> Option<std::path::PathBuf> {
+        let (this, other) = if slot_index == 0 {
+            (&self.slot_a, &self.slot_b)
+        } else {
+            (&self.slot_b, &self.slot_a)
+        };
+        [this, other].into_iter().find_map(|slot| {
+            slot.path
+                .as_deref()
+                .and_then(|p| std::path::Path::new(p).parent())
+                .map(|p| p.to_path_buf())
+        })
     }
 
     // Загружает DXF-файл по пути в указанный слот (A или B), обновляя геометрию,
@@ -452,9 +492,24 @@ impl eframe::App for App {
         let ctx = &ui.ctx().clone();
         self.scale_slider_dragging = false;
 
-        if !self.native_shadow_disabled {
-            disable_native_shadow(frame);
-            self.native_shadow_disabled = true;
+        if !self.window_configured {
+            // Отмечается сразу: следующий кадр (в том числе до закрытия окна,
+            // отклонённого ниже) не должен повторять первичную настройку.
+            self.window_configured = true;
+            startup::renderer_started();
+            platform::configure_window(frame);
+            self.render_info = renderer::render_info(frame);
+            if let Some(info) = &self.render_info {
+                let kind = if info.on_cpu { "CPU" } else { "GPU" };
+                eprintln!("Отрисовка: {kind} — {} ({})", info.device, info.api);
+                // Способ «GPU» оказался программным (например, OpenGL через llvmpipe):
+                // окно сразу скрывается и закрывается, и main пробует GPU через wgpu.
+                if info.on_cpu && renderer::reject_if_software_gpu() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
+            }
         }
 
         if !self.modal_open() {
@@ -465,6 +520,7 @@ impl eframe::App for App {
 
         self.license_window(ctx);
         self.error_window(ctx);
+        self.file_picker_window(ctx);
         self.encoding_choice_window(ctx);
 
         self.update_diff_cache(ctx);
@@ -585,17 +641,14 @@ impl eframe::App for App {
 
                 let cursor_in_canvas = response.hovered();
 
-                let (scroll, pinch) = if cursor_in_canvas {
+                let (wheel_zoom, pinch) = if cursor_in_canvas {
                     ui.input(wheel_and_pinch)
                 } else {
-                    (0.0, 1.0)
+                    (1.0, 1.0)
                 };
 
                 // Колесо мыши и пинч-жест объединяются в общий коэффициент масштабирования.
-                let mut zoom_factor: f32 = 1.0;
-                if scroll != 0.0 {
-                    zoom_factor *= (1.0 + scroll * 0.0015_f32).clamp(0.5, 1.5);
-                }
+                let mut zoom_factor: f32 = wheel_zoom;
                 if (pinch - 1.0).abs() > 0.001 {
                     zoom_factor *= pinch;
                 }
@@ -1002,7 +1055,8 @@ impl App {
                 bottom: 0,
             });
 
-        let title_bar_interactive = !self.show_license && self.error.is_none();
+        let title_bar_interactive =
+            !self.show_license && self.error.is_none() && self.file_picker.is_none();
 
         let title_bar = egui::Panel::top("title_bar")
             .resizable(false)
@@ -1064,7 +1118,7 @@ impl App {
 
                             ui.add_space(14.0);
                             ui.spacing_mut().item_spacing.x = 6.0;
-                            ui.label(egui::RichText::new("Пятёрка").size(15.0).strong());
+                            ui.label(egui::RichText::new(platform::APP_NAME).size(15.0).strong());
 
                             // Ширина подзаголовка кэшируется по языку, чтобы не пересчитывать
                             // раскладку текста (layout_no_wrap) на каждом кадре.
@@ -1256,7 +1310,26 @@ impl App {
 
     // Открыто ли какое-либо модальное окно (тогда окно нельзя растягивать за края).
     fn modal_open(&self) -> bool {
-        self.show_license || self.error.is_some() || self.pending_encoding.is_some()
+        self.show_license
+            || self.error.is_some()
+            || self.pending_encoding.is_some()
+            || self.file_picker.is_some()
+    }
+
+    // Окно встроенного обзора файлов (запасной вариант системного диалога).
+    fn file_picker_window(&mut self, ctx: &egui::Context) {
+        let Some(picker) = &mut self.file_picker else {
+            return;
+        };
+        match file_picker::show(picker, ctx, self.lang) {
+            file_picker::PickerAction::None => {}
+            file_picker::PickerAction::Cancel => self.file_picker = None,
+            file_picker::PickerAction::Open(path) => {
+                if let Some(picker) = self.file_picker.take() {
+                    self.load_path_into_slot(path, picker.slot_index, picker.forced_encoding);
+                }
+            }
+        }
     }
 
     // Модальное окно со сведениями о лицензиях используемых библиотек и шрифтов.
@@ -1266,6 +1339,7 @@ impl App {
         }
 
         let lang = self.lang;
+        let render_info = &self.render_info;
         let closed = modal_window(
             ctx,
             "license",
@@ -1302,6 +1376,14 @@ impl App {
                             ui.label("•");
                             ui.label("Noto Sans JP — SIL Open Font License 1.1 (Google LLC)");
                         });
+                        ui.add_space(6.0);
+                        ui.label(t(lang, "license_fonts_egui"));
+                        for font in EGUI_FONT_LICENSES {
+                            ui.horizontal(|ui| {
+                                ui.label("•");
+                                ui.label(*font);
+                            });
+                        }
                         ui.add_space(4.0);
                         ui.hyperlink_to("openfontlicense.org", "https://openfontlicense.org");
 
@@ -1326,6 +1408,29 @@ impl App {
                             ui.label("•");
                             ui.label("Author: Rafych");
                         });
+                        ui.add_space(8.0);
+                        ui.label(t(lang, "license_full_texts"));
+                        ui.hyperlink_to("THIRD_PARTY_LICENSES.html", THIRD_PARTY_LICENSES_URL);
+
+                        // Способ отрисовки: GPU или CPU и конкретное устройство.
+                        if let Some(info) = render_info {
+                            ui.add_space(14.0);
+                            ui.separator();
+                            ui.add_space(10.0);
+                            ui.label(egui::RichText::new(t(lang, "render_title")).strong());
+                            ui.add_space(4.0);
+                            let kind = if info.on_cpu {
+                                t(lang, "render_cpu")
+                            } else {
+                                t(lang, "render_gpu")
+                            };
+                            ui.label(kind);
+                            ui.label(
+                                egui::RichText::new(format!("{} ({})", info.device, info.api))
+                                    .small()
+                                    .weak(),
+                            );
+                        }
 
                         ui.add_space(14.0);
                     });
@@ -1680,19 +1785,6 @@ impl App {
     }
 }
 
-// Отключает системную тень и рамку Windows, которые eframe включает для окон
-// без рамки: окно рисует собственные скруглённые углы и обводку.
-#[cfg(windows)]
-fn disable_native_shadow(frame: &eframe::Frame) {
-    use winit::platform::windows::WindowExtWindows as _;
-    if let Some(window) = frame.winit_window() {
-        window.set_undecorated_shadow(false);
-    }
-}
-
-#[cfg(not(windows))]
-fn disable_native_shadow(_frame: &eframe::Frame) {}
-
 // Край панели, вдоль которого рисуется разделительная линия.
 enum PanelEdge {
     Bottom,
@@ -1741,12 +1833,18 @@ fn discard_if_panel_resized(ctx: &egui::Context, id: egui::Id, before: Option<Re
 // Сколько точек (points) прокрутки соответствует одной строке колеса мыши.
 const POINTS_PER_SCROLL_LINE: f32 = 50.0;
 
-// Возвращает за текущий кадр вертикальную прокрутку колесом (в points, без сглаживания)
-// и коэффициент масштабирования жестом/Ctrl+колесом.
+// Насколько меняется масштаб холста на одну точку (point) прокрутки колесом.
+const WHEEL_ZOOM_PER_POINT: f32 = 0.0015;
+
+// Возвращает за текущий кадр коэффициент масштабирования колесом и коэффициент
+// масштабирования жестом/Ctrl+колесом.
+// Каждое событие колеса учитывается отдельно: если кадры идут редко (например, при
+// отрисовке на CPU) и за кадр приходит несколько щелчков колеса, масштаб меняется
+// так же, как если бы они пришли в разных кадрах.
 // Колесо с Ctrl (Cmd) работает как масштабирование, с Shift — как горизонтальная
-// прокрутка (вертикальная составляющая тогда равна нулю).
+// прокрутка (на масштаб холста тогда не влияет).
 fn wheel_and_pinch(i: &egui::InputState) -> (f32, f32) {
-    let mut scroll_y = 0.0_f32;
+    let mut wheel_zoom = 1.0_f32;
     let mut zoom = 1.0_f32;
     for event in &i.events {
         match event {
@@ -1763,8 +1861,8 @@ fn wheel_and_pinch(i: &egui::InputState) -> (f32, f32) {
                 };
                 if modifiers.ctrl || modifiers.command {
                     zoom *= (delta.y / 200.0).exp();
-                } else if !modifiers.shift {
-                    scroll_y += delta.y;
+                } else if !modifiers.shift && delta.y != 0.0 {
+                    wheel_zoom *= (1.0 + delta.y * WHEEL_ZOOM_PER_POINT).clamp(0.5, 1.5);
                 }
             }
             egui::Event::Zoom(factor) => zoom *= *factor,
@@ -1773,7 +1871,7 @@ fn wheel_and_pinch(i: &egui::InputState) -> (f32, f32) {
     }
     // Пинч на сенсорном экране (несколько касаний) заменяет остальные источники масштаба.
     let pinch = i.multi_touch().map_or(zoom, |touch| touch.zoom_delta);
-    (scroll_y, pinch)
+    (wheel_zoom, pinch)
 }
 
 // Модальное окно в общем стиле приложения: затемнение фона, рамка со скруглёнными
@@ -2060,15 +2158,34 @@ fn traffic_light_button(ui: &mut egui::Ui, color: Color32, kind: u8) -> bool {
 }
 
 // Список сторонних библиотек и их лицензий для окна "О программе".
+// Здесь перечислены прямые зависимости и wgpu; полный список всех входящих
+// библиотек с текстами лицензий — в THIRD_PARTY_LICENSES.html (см. licenses/).
 const LIBRARY_LICENSES: &[(&str, &str, &str)] = &[
     ("eframe", "0.36", "MIT OR Apache-2.0"),
     ("egui", "0.36", "MIT OR Apache-2.0"),
+    ("wgpu", "30", "MIT OR Apache-2.0"),
+    ("winit", "0.30", "Apache-2.0"),
     ("dxf", "0.6", "MIT"),
     ("rfd", "0.17", "MIT"),
+    ("encoding_rs", "0.8", "(MIT OR Apache-2.0) AND BSD-3-Clause"),
+    ("chardetng", "1", "MIT OR Apache-2.0"),
     ("serde", "1", "MIT OR Apache-2.0"),
     ("image", "0.25", "MIT OR Apache-2.0"),
-    ("winres", "0.1", "MIT (только Windows)"),
+    ("log", "0.4", "MIT OR Apache-2.0"),
+    ("libc", "0.2", "MIT OR Apache-2.0"),
 ];
+
+// Шрифты, которые библиотека egui встраивает в приложение (крейт epaint_default_fonts).
+const EGUI_FONT_LICENSES: &[&str] = &[
+    "Hack — MIT License / Bitstream Vera License",
+    "Ubuntu Light — Ubuntu Font Licence 1.0",
+    "Noto Emoji — SIL Open Font License 1.1",
+    "emoji-icon-font — MIT License",
+];
+
+// Страница с полными текстами лицензий всех входящих библиотек и шрифтов.
+const THIRD_PARTY_LICENSES_URL: &str =
+    "https://rafych.github.io/pyatorka/THIRD_PARTY_LICENSES.html";
 
 // HAS_ICON и содержимое иконки подготавливаются build.rs (см. resolve_icon).
 include!(concat!(env!("OUT_DIR"), "/icon_info.rs"));
@@ -2091,26 +2208,90 @@ fn load_app_icon() -> Option<egui::IconData> {
 // Точка входа: настраивает окно (без системной рамки, с прозрачностью для
 // собственных скруглённых углов) и запускает цикл eframe.
 fn main() -> eframe::Result<()> {
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([1120.0, 720.0])
-        .with_min_inner_size([420.0, 480.0])
-        .with_title("Пятёрка")
-        .with_decorations(false)
-        .with_transparent(true);
+    file_picker::install_dialog_logger();
+    startup::install_panic_hook();
 
-    if let Some(icon) = load_app_icon() {
-        viewport = viewport.with_icon(icon);
+    // Без нужных системных компонентов окно не откроется (а в Linux часть из них
+    // приводит к аварийному завершению), поэтому они проверяются заранее.
+    if let Err(message) = platform::check_environment() {
+        startup::show_error(&message);
+        std::process::exit(1);
     }
 
-    let options = eframe::NativeOptions {
-        viewport,
-        persist_window: false,
-        ..Default::default()
+    let icon = load_app_icon();
+    let make_options = || {
+        let mut viewport = egui::ViewportBuilder::default()
+            .with_inner_size([1120.0, 720.0])
+            .with_min_inner_size([420.0, 480.0])
+            .with_title(platform::APP_NAME)
+            .with_app_id(platform::APP_ID)
+            .with_decorations(false)
+            .with_transparent(true);
+        if let Some(icon) = icon.clone() {
+            viewport = viewport.with_icon(icon);
+        }
+        eframe::NativeOptions {
+            viewport,
+            persist_window: false,
+            persistence_path: platform::settings_file(),
+            // Цикл событий сохраняется между запусками, поэтому при неудаче
+            // одного способа отрисовки можно сразу попробовать следующий.
+            run_and_return: true,
+            ..Default::default()
+        }
     };
 
-    eframe::run_native(
-        "Пятёрка",
-        options,
-        Box::new(|cc| Ok(Box::new(App::new(cc)))),
-    )
+    // Способы отрисовки перебираются по порядку: сначала GPU, затем CPU.
+    let mut renderer_errors = Vec::new();
+    for attempt in renderer::attempts() {
+        let mut options = make_options();
+        renderer::apply(attempt, &mut options);
+        renderer::set_current(attempt);
+        // Некоторые библиотеки отрисовки сообщают об отсутствии подходящего GPU
+        // паникой, а не ошибкой, поэтому паника во время запуска перехватывается
+        // и считается неудачей этого способа отрисовки.
+        startup::begin_renderer_start();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            eframe::run_native(
+                platform::APP_NAME,
+                options,
+                Box::new(|cc| Ok(Box::new(App::new(cc)))),
+            )
+        }));
+        let result = match result {
+            Ok(result) => result,
+            Err(_) if !startup::is_renderer_starting() => {
+                // Паника после запуска — настоящий сбой: сообщение уже показано.
+                std::process::exit(1);
+            }
+            Err(payload) => {
+                let message = startup::panic_message(payload.as_ref());
+                eprintln!("Отрисовка ({}) недоступна: {message}", attempt.describe());
+                renderer_errors.push(format!("{}: {message}", attempt.describe()));
+                continue;
+            }
+        };
+        startup::renderer_started();
+        match result {
+            Err(err) if renderer::is_renderer_error(&err) => {
+                eprintln!("Отрисовка ({}) недоступна: {err}", attempt.describe());
+                renderer_errors.push(format!("{}: {err}", attempt.describe()));
+            }
+            Err(err) => {
+                startup::show_error(&startup::compose("startup_failed", &err.to_string()));
+                return Err(err);
+            }
+            Ok(()) if renderer::take_software_gpu_rejection() => {
+                let reason = "вместо GPU запустилась программная отрисовка";
+                eprintln!("Отрисовка ({}) недоступна: {reason}", attempt.describe());
+                renderer_errors.push(format!("{}: {reason}", attempt.describe()));
+            }
+            Ok(()) => return Ok(()),
+        }
+    }
+
+    // Ни один способ отрисовки не запустился.
+    let details = renderer_errors.join("\n");
+    startup::show_error(&startup::compose("startup_no_renderer", &details));
+    std::process::exit(1);
 }

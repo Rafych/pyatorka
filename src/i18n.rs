@@ -84,8 +84,12 @@ pub fn t(lang: Lang, key: &str) -> &'static str {
         (Lang::Ja, "scale_reset") => "倍率をリセット",
 
         (Lang::En, "tip") => "Tip: drag to pan, scroll or pinch to zoom around your cursor.",
-        (Lang::Ru, "tip") => "Совет: перетащите для перемещения, прокрутите/щипок для масштабирования у курсора.",
-        (Lang::Ja, "tip") => "ヒント：ドラッグで移動、スクロール/ピンチでカーソル位置を中心に拡大縮小できます。",
+        (Lang::Ru, "tip") => {
+            "Совет: перетащите для перемещения, прокрутите/щипок для масштабирования у курсора."
+        }
+        (Lang::Ja, "tip") => {
+            "ヒント：ドラッグで移動、スクロール/ピンチでカーソル位置を中心に拡大縮小できます。"
+        }
 
         (Lang::En, "diff_title") => "Diff Highlight",
         (Lang::Ru, "diff_title") => "Подсветка различий",
@@ -107,15 +111,20 @@ pub fn t(lang: Lang, key: &str) -> &'static str {
         (Lang::Ru, "diff_color_reset") => "Сбросить цвет",
         (Lang::Ja, "diff_color_reset") => "色をリセット",
 
-        (Lang::En, "diff_tip") =>
-            "Compares all supported 2D CAD elements — lines, curves (arcs/ellipses/splines approximated as polylines), circles, points, and text. Only parts that completely coincide count as identical; everything else is highlighted as a difference. File A's and File B's diffs are shown in separate colors.",
-        (Lang::Ru, "diff_tip") =>
-            "Сравнивает все поддерживаемые 2D CAD-элементы — линии, кривые (дуги/эллипсы/сплайны, аппроксимированные ломаными), окружности, точки и текст. Идентичными считаются только полностью совпадающие участки, всё остальное подсвечивается как различие. Различия файлов A и B показаны разными цветами.",
-        (Lang::Ja, "diff_tip") =>
-            "線分・曲線（円弧/楕円/スプライン等の折れ線近似を含む）・円・点・文字など、対応するすべての2D CAD要素を対象に、完全に重なっている部分だけを「同一」とみなし、それ以外はすべて差分としてハイライトします。Aの差分とBの差分は別の色で表示されます。",
+        (Lang::En, "diff_tip") => {
+            "Compares all supported 2D CAD elements — lines, curves (arcs/ellipses/splines approximated as polylines), circles, points, and text. Only parts that completely coincide count as identical; everything else is highlighted as a difference. File A's and File B's diffs are shown in separate colors."
+        }
+        (Lang::Ru, "diff_tip") => {
+            "Сравнивает все поддерживаемые 2D CAD-элементы — линии, кривые (дуги/эллипсы/сплайны, аппроксимированные ломаными), окружности, точки и текст. Идентичными считаются только полностью совпадающие участки, всё остальное подсвечивается как различие. Различия файлов A и B показаны разными цветами."
+        }
+        (Lang::Ja, "diff_tip") => {
+            "線分・曲線（円弧/楕円/スプライン等の折れ線近似を含む）・円・点・文字など、対応するすべての2D CAD要素を対象に、完全に重なっている部分だけを「同一」とみなし、それ以外はすべて差分としてハイライトします。Aの差分とBの差分は別の色で表示されます。"
+        }
 
         (Lang::En, "diff_need_both") => "Load both File A and File B to see the diff highlight.",
-        (Lang::Ru, "diff_need_both") => "Чтобы увидеть подсветку различий, загрузите оба файла — A и B.",
+        (Lang::Ru, "diff_need_both") => {
+            "Чтобы увидеть подсветку различий, загрузите оба файла — A и B."
+        }
         (Lang::Ja, "diff_need_both") => "差分表示には、AとBの両方のファイルを読み込んでください。",
 
         (Lang::En, "load_error") => "Load error",
@@ -130,12 +139,15 @@ pub fn t(lang: Lang, key: &str) -> &'static str {
         (Lang::Ru, "encoding_dialog_title") => "Выберите кодировку текста",
         (Lang::Ja, "encoding_dialog_title") => "文字コードを選択してください",
 
-        (Lang::En, "encoding_dialog_desc") =>
-            "This DXF file's text encoding could not be detected automatically. Please choose the encoding that displays the text correctly.",
-        (Lang::Ru, "encoding_dialog_desc") =>
-            "Не удалось автоматически определить кодировку текста этого DXF-файла. Выберите кодировку, при которой текст отображается корректно.",
-        (Lang::Ja, "encoding_dialog_desc") =>
-            "このDXFファイルの文字コードを自動判定できませんでした。文字が正しく表示される文字コードを下から選んでください。",
+        (Lang::En, "encoding_dialog_desc") => {
+            "This DXF file's text encoding could not be detected automatically. Please choose the encoding that displays the text correctly."
+        }
+        (Lang::Ru, "encoding_dialog_desc") => {
+            "Не удалось автоматически определить кодировку текста этого DXF-файла. Выберите кодировку, при которой текст отображается корректно."
+        }
+        (Lang::Ja, "encoding_dialog_desc") => {
+            "このDXFファイルの文字コードを自動判定できませんでした。文字が正しく表示される文字コードを下から選んでください。"
+        }
 
         (Lang::En, "encoding_ok") => "Load with this encoding",
         (Lang::Ru, "encoding_ok") => "Загрузить с этой кодировкой",
@@ -201,23 +213,151 @@ pub fn t(lang: Lang, key: &str) -> &'static str {
         (Lang::Ru, "license_fonts") => "Используемые шрифты",
         (Lang::Ja, "license_fonts") => "使用フォント",
 
-        (Lang::En, "license_fonts_body") =>
-            "Google Sans and Noto Sans JP are both provided by Google LLC under the SIL Open Font License, Version 1.1 (OFL).",
-        (Lang::Ru, "license_fonts_body") =>
-            "Google Sans и Noto Sans JP предоставляются Google LLC по лицензии SIL Open Font License, версия 1.1 (OFL).",
-        (Lang::Ja, "license_fonts_body") =>
-            "Google Sans と Noto Sans JP は、いずれも SIL Open Font License, Version 1.1（OFL）のもとで Google LLC により提供されています。",
+        (Lang::En, "license_fonts_body") => {
+            "Google Sans and Noto Sans JP are both provided by Google LLC under the SIL Open Font License, Version 1.1 (OFL)."
+        }
+        (Lang::Ru, "license_fonts_body") => {
+            "Google Sans и Noto Sans JP предоставляются Google LLC по лицензии SIL Open Font License, версия 1.1 (OFL)."
+        }
+        (Lang::Ja, "license_fonts_body") => {
+            "Google Sans と Noto Sans JP は、いずれも SIL Open Font License, Version 1.1（OFL）のもとで Google LLC により提供されています。"
+        }
 
         (Lang::En, "license_software") => "About This Software",
         (Lang::Ru, "license_software") => "Об этом программном обеспечении",
         (Lang::Ja, "license_software") => "本ソフトウェアについて",
 
-        (Lang::En, "license_software_body") =>
-            "This software is released under the MIT License. It is created by Rafych, and the source code is distributed at the repository below:",
-        (Lang::Ru, "license_software_body") =>
-            "Это программное обеспечение распространяется по лицензии MIT. Автор — Rafych. Исходный код распространяется в следующем репозитории:",
-        (Lang::Ja, "license_software_body") =>
-            "本ソフトウェアは MIT License のもとで公開されています。作者は Rafych です。ソースコードは以下のリポジトリで配布されています:",
+        (Lang::En, "license_software_body") => {
+            "This software is released under the MIT License. It is created by Rafych, and the source code is distributed at the repository below:"
+        }
+        (Lang::Ru, "license_software_body") => {
+            "Это программное обеспечение распространяется по лицензии MIT. Автор — Rafych. Исходный код распространяется в следующем репозитории:"
+        }
+        (Lang::Ja, "license_software_body") => {
+            "本ソフトウェアは MIT License のもとで公開されています。作者は Rafych です。ソースコードは以下のリポジトリで配布されています:"
+        }
+
+        (Lang::En, "picker_title") => "Open DXF File",
+        (Lang::Ru, "picker_title") => "Открыть файл DXF",
+        (Lang::Ja, "picker_title") => "DXFファイルを開く",
+
+        (Lang::En, "picker_note") => {
+            "The system file dialog is not available, so the built-in file browser is used."
+        }
+        (Lang::Ru, "picker_note") => {
+            "Системный диалог выбора файла недоступен, поэтому используется встроенный обзор файлов."
+        }
+        (Lang::Ja, "picker_note") => {
+            "システムのファイル選択ダイアログを利用できないため、内蔵のファイルブラウザーを使用しています。"
+        }
+
+        (Lang::En, "picker_up") => "Up",
+        (Lang::Ru, "picker_up") => "Вверх",
+        (Lang::Ja, "picker_up") => "上へ",
+
+        (Lang::En, "picker_home") => "Home",
+        (Lang::Ru, "picker_home") => "Домой",
+        (Lang::Ja, "picker_home") => "ホーム",
+
+        (Lang::En, "picker_path_hint") => "Path to a folder or DXF file",
+        (Lang::Ru, "picker_path_hint") => "Путь к папке или DXF-файлу",
+        (Lang::Ja, "picker_path_hint") => "フォルダーまたはDXFファイルのパス",
+
+        (Lang::En, "picker_open") => "Open",
+        (Lang::Ru, "picker_open") => "Открыть",
+        (Lang::Ja, "picker_open") => "開く",
+
+        (Lang::En, "picker_cancel") => "Cancel",
+        (Lang::Ru, "picker_cancel") => "Отмена",
+        (Lang::Ja, "picker_cancel") => "キャンセル",
+
+        (Lang::En, "picker_empty") => "No folders or DXF files here",
+        (Lang::Ru, "picker_empty") => "Здесь нет папок и DXF-файлов",
+        (Lang::Ja, "picker_empty") => "フォルダーやDXFファイルがありません",
+
+        (Lang::En, "picker_read_error") => "This folder cannot be opened",
+        (Lang::Ru, "picker_read_error") => "Не удаётся открыть эту папку",
+        (Lang::Ja, "picker_read_error") => "このフォルダーを開けません",
+
+        (Lang::En, "picker_not_found") => "No such folder or file",
+        (Lang::Ru, "picker_not_found") => "Такой папки или файла нет",
+        (Lang::Ja, "picker_not_found") => "そのフォルダーまたはファイルは存在しません",
+
+        (Lang::En, "startup_missing_libs") => {
+            "Pyatorka cannot start because required system libraries are missing:"
+        }
+        (Lang::Ru, "startup_missing_libs") => {
+            "Пятёрка не может запуститься: отсутствуют необходимые системные библиотеки:"
+        }
+        (Lang::Ja, "startup_missing_libs") => {
+            "必要なシステムライブラリが見つからないため、Пятёрка を起動できません:"
+        }
+
+        (Lang::En, "startup_install_hint") => {
+            "Install them with your package manager. On Debian/Ubuntu:"
+        }
+        (Lang::Ru, "startup_install_hint") => {
+            "Установите их через менеджер пакетов. В Debian/Ubuntu:"
+        }
+        (Lang::Ja, "startup_install_hint") => {
+            "パッケージマネージャーでインストールしてください。Debian/Ubuntu の場合:"
+        }
+
+        (Lang::En, "startup_no_display") => {
+            "Pyatorka cannot start because no graphical session was found (neither WAYLAND_DISPLAY nor DISPLAY is set)."
+        }
+        (Lang::Ru, "startup_no_display") => {
+            "Пятёрка не может запуститься: графический сеанс не найден (не заданы ни WAYLAND_DISPLAY, ни DISPLAY)."
+        }
+        (Lang::Ja, "startup_no_display") => {
+            "グラフィカルセッションが見つからないため、Пятёрка を起動できません（WAYLAND_DISPLAY も DISPLAY も設定されていません）。"
+        }
+
+        (Lang::En, "startup_failed") => "Pyatorka could not start.",
+        (Lang::Ru, "startup_failed") => "Пятёрка не смогла запуститься.",
+        (Lang::Ja, "startup_failed") => "Пятёрка を起動できませんでした。",
+
+        (Lang::En, "startup_crashed") => "Pyatorka stopped because of an unexpected error.",
+        (Lang::Ru, "startup_crashed") => "Пятёрка остановлена из-за непредвиденной ошибки.",
+        (Lang::Ja, "startup_crashed") => "予期しないエラーが発生したため、Пятёрка を終了しました。",
+
+        (Lang::En, "license_fonts_egui") => "Fonts bundled with the egui library:",
+        (Lang::Ru, "license_fonts_egui") => "Шрифты, входящие в библиотеку egui:",
+        (Lang::Ja, "license_fonts_egui") => "egui ライブラリに付属するフォント:",
+
+        (Lang::En, "license_full_texts") => {
+            "Full license texts of all included libraries and fonts are in THIRD_PARTY_LICENSES.html (included with the download):"
+        }
+        (Lang::Ru, "license_full_texts") => {
+            "Полные тексты лицензий всех входящих библиотек и шрифтов — в файле THIRD_PARTY_LICENSES.html (входит в загрузку):"
+        }
+        (Lang::Ja, "license_full_texts") => {
+            "含まれるすべてのライブラリとフォントのライセンス全文は THIRD_PARTY_LICENSES.html（ダウンロードに同梱）にあります:"
+        }
+
+        (Lang::En, "startup_no_renderer") => {
+            "Pyatorka could not start because neither the GPU nor CPU (software) rendering could be initialized."
+        }
+        (Lang::Ru, "startup_no_renderer") => {
+            "Пятёрка не смогла запуститься: не удалось включить отрисовку ни на GPU, ни на CPU (программную)."
+        }
+        (Lang::Ja, "startup_no_renderer") => {
+            "GPU でも CPU（ソフトウェア）でも描画を初期化できなかったため、Пятёрка を起動できませんでした。"
+        }
+
+        (Lang::En, "render_title") => "Rendering",
+        (Lang::Ru, "render_title") => "Отрисовка",
+        (Lang::Ja, "render_title") => "描画",
+
+        (Lang::En, "render_gpu") => "GPU (hardware acceleration)",
+        (Lang::Ru, "render_gpu") => "GPU (аппаратное ускорение)",
+        (Lang::Ja, "render_gpu") => "GPU（ハードウェアアクセラレーション）",
+
+        (Lang::En, "render_cpu") => "CPU (software rendering — no usable GPU was found)",
+        (Lang::Ru, "render_cpu") => "CPU (программная отрисовка — подходящий GPU не найден)",
+        (Lang::Ja, "render_cpu") => {
+            "CPU（ソフトウェア描画 — 使用できる GPU が見つかりませんでした）"
+        }
 
         _ => "",
     }
