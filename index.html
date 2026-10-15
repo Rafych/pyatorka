@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pyatorka — DXF Overlay Viewer</title>
+<link rel="icon" href="assets/icon.ico" sizes="256x256">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Google+Sans:ital,opsz,wght@0,17..18,400..700;1,17..18,400..700&family=Noto+Sans+JP:wght@100..900&display=swap" rel="stylesheet">
@@ -227,6 +230,9 @@ footer{
   color:var(--text-muted);
   margin:0;
 }
+.license-card p + p{
+  margin-top:8px;
+}
 .license-card ul{
   padding-left:0;
   list-style:none;
@@ -343,30 +349,36 @@ footer{
       <p>Pyatorka is released under the MIT License. Created by Rafych. Source code: <a href="https://github.com/Rafych/pyatorka" target="_blank" rel="noopener">github.com/Rafych/pyatorka</a></p>
       <h3>Libraries Used</h3>
       <ul>
-        <li>eframe / egui</li><li>dxf</li><li>rfd</li><li>encoding_rs</li><li>chardetng</li><li>serde</li><li>image</li><li>winres</li>
+        <li>eframe / egui</li><li>wgpu</li><li>winit</li><li>dxf</li><li>rfd</li><li>encoding_rs</li><li>chardetng</li><li>serde</li><li>image</li><li>log</li><li>libc</li>
       </ul>
       <h3>Fonts Used</h3>
       <p>Google Sans and Noto Sans JP are provided by Google LLC under the SIL Open Font License, Version 1.1 (OFL).</p>
+      <p>The application also includes the fonts bundled with the egui library: Hack (MIT License / Bitstream Vera License), Ubuntu Light (Ubuntu Font Licence 1.0), Noto Emoji (SIL Open Font License 1.1) and emoji-icon-font (MIT License).</p>
+      <p>Full license texts of all included libraries and fonts: <a href="THIRD_PARTY_LICENSES.html" target="_blank" rel="noopener">THIRD_PARTY_LICENSES.html</a></p>
     </div>
     <div lang-block="ru">
       <h3>Программное обеспечение</h3>
       <p>Пятёрка распространяется по лицензии MIT. Автор — Rafych. Исходный код: <a href="https://github.com/Rafych/pyatorka" target="_blank" rel="noopener">github.com/Rafych/pyatorka</a></p>
       <h3>Используемые библиотеки</h3>
       <ul>
-        <li>eframe / egui</li><li>dxf</li><li>rfd</li><li>encoding_rs</li><li>chardetng</li><li>serde</li><li>image</li><li>winres</li>
+        <li>eframe / egui</li><li>wgpu</li><li>winit</li><li>dxf</li><li>rfd</li><li>encoding_rs</li><li>chardetng</li><li>serde</li><li>image</li><li>log</li><li>libc</li>
       </ul>
       <h3>Используемые шрифты</h3>
       <p>Google Sans и Noto Sans JP предоставляются Google LLC по лицензии SIL Open Font License, версия 1.1 (OFL).</p>
+      <p>Также в приложение входят шрифты библиотеки egui: Hack (MIT License / Bitstream Vera License), Ubuntu Light (Ubuntu Font Licence 1.0), Noto Emoji (SIL Open Font License 1.1) и emoji-icon-font (MIT License).</p>
+      <p>Полные тексты лицензий всех входящих библиотек и шрифтов: <a href="THIRD_PARTY_LICENSES.html" target="_blank" rel="noopener">THIRD_PARTY_LICENSES.html</a></p>
     </div>
     <div lang-block="ja">
       <h3>本ソフトウェアについて</h3>
       <p>本ソフトウェアは MIT License のもとで公開されています。作者は Rafych です。ソースコード: <a href="https://github.com/Rafych/pyatorka" target="_blank" rel="noopener">github.com/Rafych/pyatorka</a></p>
       <h3>使用ライブラリ</h3>
       <ul>
-        <li>eframe / egui</li><li>dxf</li><li>rfd</li><li>encoding_rs</li><li>chardetng</li><li>serde</li><li>image</li><li>winres</li>
+        <li>eframe / egui</li><li>wgpu</li><li>winit</li><li>dxf</li><li>rfd</li><li>encoding_rs</li><li>chardetng</li><li>serde</li><li>image</li><li>log</li><li>libc</li>
       </ul>
       <h3>使用フォント</h3>
       <p>Google Sans と Noto Sans JP は、いずれも SIL Open Font License, Version 1.1（OFL）のもとで Google LLC により提供されています。</p>
+      <p>また、egui ライブラリに付属するフォント Hack（MIT License / Bitstream Vera License）、Ubuntu Light（Ubuntu Font Licence 1.0）、Noto Emoji（SIL Open Font License 1.1）、emoji-icon-font（MIT License）も含まれています。</p>
+      <p>含まれるすべてのライブラリとフォントのライセンス全文: <a href="THIRD_PARTY_LICENSES.html" target="_blank" rel="noopener">THIRD_PARTY_LICENSES.html</a></p>
     </div>
   </div>
 </footer>

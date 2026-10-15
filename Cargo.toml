@@ -1,13 +1,15 @@
 [package]
 name = "pyatorka"
-version = "1.0.0"
+version = "1.0.4"
 edition = "2024"
 description = "Пятёрка — просмотрщик наложения DXF-файлов"
 authors = ["Rafych"]
+license = "MIT"
 
 [dependencies]
-# Отрисовка через OpenGL (glow), как и раньше: в eframe 0.36 по умолчанию включён
-# wgpu, с которым полупрозрачные элементы (подсветка различий и т.п.) смешиваются иначе.
+# Основная отрисовка — через OpenGL (glow) на GPU, как и раньше. wgpu подключён как
+# запасной путь: GPU без драйвера OpenGL и отрисовка на CPU, когда GPU нет
+# (порядок выбора — в src/renderer.rs).
 eframe = { version = "0.36", default-features = false, features = [
     "accesskit",
     "default_fonts",
@@ -16,6 +18,7 @@ eframe = { version = "0.36", default-features = false, features = [
     "persistence",
     "wayland",
     "web_screen_reader",
+    "wgpu",
     "x11",
 ] }
 egui = "0.36"
@@ -27,17 +30,22 @@ encoding_rs = "0.8"
 chardetng = "1"
 serde = { version = "1", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Используется, чтобы узнать из журнала rfd, что системный диалог выбора файла
+# недоступен (тогда открывается встроенный обзор файлов).
+log = { version = "0.4", features = ["std"] }
+
+# Используется для проверки системных библиотек (dlopen) перед открытием окна в Linux.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 
 # Используется, чтобы отключить системную тень/рамку Windows у окна без рамки
 # (иначе она рисуется поверх собственных скруглённых углов окна).
 # Версия должна совпадать с той, что использует eframe.
-[target.'cfg(windows)'.dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
 winit = { version = "0.30", default-features = false }
 
-# Используется для встраивания значка самого исполняемого файла Windows
-# (отображается в проводнике). На сборку под другие платформы не влияет.
-[target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
+# Значок .exe и сведения о версии для Windows собираются в build.rs на чистом Rust,
+# поэтому зависимости для сборки не нужны.
 
 # Настройки релизной сборки: единый бинарник, максимальная оптимизация
 [profile.release]
@@ -45,5 +53,7 @@ opt-level = 3
 lto = true
 strip = true
 codegen-units = 1
-panic = "abort"
+# "unwind", а не "abort": некоторые библиотеки отрисовки сообщают об отсутствии
+# подходящего GPU паникой, и её нужно перехватить, чтобы перейти на отрисовку на CPU.
+panic = "unwind"
 

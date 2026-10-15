@@ -124,30 +124,245 @@ fn resolve_icon(out_dir: &str) {
     }
 }
 
-// Встраивает иконку .exe (видна в проводнике Windows) из assets/icon.ico.
-// На других платформах эта функция ничего не делает (см. ниже).
-#[cfg(windows)]
-fn embed_windows_icon() {
-    let ico_path = "assets/icon.ico";
-    if Path::new(ico_path).exists() {
-        let mut res = winres::WindowsResource::new();
-        res.set_icon(ico_path);
-        if let Err(e) = res.compile() {
-            panic!(
-                "Не удалось встроить значок Windows ({}): {}",
-                ico_path, e
-            );
-        }
-        println!("cargo:rerun-if-changed={}", ico_path);
-    } else {
-        println!(
-            "cargo:warning=Файл assets/icon.ico не найден, значок .exe останется стандартным."
-        );
+// ---------------------------------------------------------------------------
+// Ресурсы Windows (значок .exe и сведения о версии).
+//
+// Файл ресурсов (.res) собирается здесь же, на чистом Rust, и передаётся
+// компоновщику напрямую — без компилятора ресурсов rc.exe и сторонних крейтов.
+// Код одинаково работает при сборке и на Windows, и на Linux.
+// ---------------------------------------------------------------------------
+
+const RT_ICON: u16 = 3;
+const RT_GROUP_ICON: u16 = 14;
+const RT_VERSION: u16 = 16;
+// Флаги памяти, которые ставит и rc.exe: MOVEABLE | PURE (| DISCARDABLE для значков).
+const MEMFLAGS_ICON: u16 = 0x1030;
+const MEMFLAGS_VERSION: u16 = 0x0030;
+// Язык, не зависящий от региона (так же, как раньше делал winres).
+const LANG_NEUTRAL: u16 = 0x0000;
+const CODEPAGE_UNICODE: u16 = 0x04B0;
+
+fn push_u16(buf: &mut Vec<u8>, v: u16) {
+    buf.extend_from_slice(&v.to_le_bytes());
+}
+
+fn push_u32(buf: &mut Vec<u8>, v: u32) {
+    buf.extend_from_slice(&v.to_le_bytes());
+}
+
+// Строка UTF-16LE с завершающим нулём.
+fn push_utf16z(buf: &mut Vec<u8>, s: &str) {
+    for unit in s.encode_utf16() {
+        push_u16(buf, unit);
+    }
+    push_u16(buf, 0);
+}
+
+// Выравнивание до границы 4 байт, обязательное в формате .res.
+fn pad4(buf: &mut Vec<u8>) {
+    while !buf.len().is_multiple_of(4) {
+        buf.push(0);
     }
 }
 
-#[cfg(not(windows))]
-fn embed_windows_icon() {}
+// Добавляет в файл .res одну запись с числовыми типом и именем.
+fn push_resource(res: &mut Vec<u8>, type_id: u16, name_id: u16, mem_flags: u16, data: &[u8]) {
+    push_u32(res, data.len() as u32); // DataSize
+    push_u32(res, 32); // HeaderSize
+    push_u16(res, 0xFFFF);
+    push_u16(res, type_id);
+    push_u16(res, 0xFFFF);
+    push_u16(res, name_id);
+    push_u32(res, 0); // DataVersion
+    push_u16(res, mem_flags);
+    push_u16(res, LANG_NEUTRAL);
+    push_u32(res, 0); // Version
+    push_u32(res, 0); // Characteristics
+    res.extend_from_slice(data);
+    pad4(res);
+}
+
+// Значение узла в дереве сведений о версии (VS_VERSIONINFO).
+enum VersionValue<'a> {
+    None,
+    Binary(&'a [u8]),
+    Text(&'a str),
+}
+
+// Собирает узел VS_VERSIONINFO: заголовок, ключ, значение и вложенные узлы.
+// `text_type` задаёт wType: 1 — текстовые узлы и контейнеры, 0 — двоичные.
+fn version_node(key: &str, value: VersionValue, text_type: bool, children: &[Vec<u8>]) -> Vec<u8> {
+    let mut node = vec![0u8; 6];
+    push_utf16z(&mut node, key);
+    pad4(&mut node);
+    let value_length = match value {
+        VersionValue::None => 0,
+        VersionValue::Binary(bytes) => {
+            node.extend_from_slice(bytes);
+            bytes.len()
+        }
+        VersionValue::Text(text) => {
+            push_utf16z(&mut node, text);
+            // Для текста длина значения указывается в символах UTF-16 с нулём.
+            text.encode_utf16().count() + 1
+        }
+    };
+    for child in children {
+        pad4(&mut node);
+        node.extend_from_slice(child);
+    }
+    let length = node.len() as u16;
+    node[0..2].copy_from_slice(&length.to_le_bytes());
+    node[2..4].copy_from_slice(&(value_length as u16).to_le_bytes());
+    node[4..6].copy_from_slice(&(text_type as u16).to_le_bytes());
+    node
+}
+
+// Сведения о версии, видимые в свойствах .exe (те же поля, что ставил winres).
+fn version_info_resource() -> Vec<u8> {
+    let part = |name: &str| -> u32 {
+        env::var(name)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    };
+    let (major, minor, patch) = (
+        part("CARGO_PKG_VERSION_MAJOR"),
+        part("CARGO_PKG_VERSION_MINOR"),
+        part("CARGO_PKG_VERSION_PATCH"),
+    );
+    let version = env::var("CARGO_PKG_VERSION").unwrap_or_default();
+    let name = env::var("CARGO_PKG_NAME").unwrap_or_default();
+
+    // VS_FIXEDFILEINFO.
+    let mut fixed = Vec::new();
+    push_u32(&mut fixed, 0xFEEF04BD); // dwSignature
+    push_u32(&mut fixed, 0x0001_0000); // dwStrucVersion
+    push_u32(&mut fixed, (major << 16) | minor); // dwFileVersionMS
+    push_u32(&mut fixed, patch << 16); // dwFileVersionLS
+    push_u32(&mut fixed, (major << 16) | minor); // dwProductVersionMS
+    push_u32(&mut fixed, patch << 16); // dwProductVersionLS
+    push_u32(&mut fixed, 0x3F); // dwFileFlagsMask
+    push_u32(&mut fixed, 0); // dwFileFlags
+    push_u32(&mut fixed, 0x0004_0004); // dwFileOS = VOS_NT_WINDOWS32
+    push_u32(&mut fixed, 1); // dwFileType = VFT_APP
+    push_u32(&mut fixed, 0); // dwFileSubtype
+    push_u32(&mut fixed, 0); // dwFileDateMS
+    push_u32(&mut fixed, 0); // dwFileDateLS
+
+    let strings: Vec<Vec<u8>> = [
+        ("FileDescription", name.as_str()),
+        ("FileVersion", version.as_str()),
+        ("ProductName", name.as_str()),
+        ("ProductVersion", version.as_str()),
+    ]
+    .iter()
+    .map(|(key, value)| version_node(key, VersionValue::Text(value), true, &[]))
+    .collect();
+    let table_key = format!("{:04x}{:04x}", LANG_NEUTRAL, CODEPAGE_UNICODE);
+    let string_table = version_node(&table_key, VersionValue::None, true, &strings);
+    let string_file_info =
+        version_node("StringFileInfo", VersionValue::None, true, &[string_table]);
+
+    let mut translation = Vec::new();
+    push_u16(&mut translation, LANG_NEUTRAL);
+    push_u16(&mut translation, CODEPAGE_UNICODE);
+    let var = version_node(
+        "Translation",
+        VersionValue::Binary(&translation),
+        false,
+        &[],
+    );
+    let var_file_info = version_node("VarFileInfo", VersionValue::None, true, &[var]);
+
+    version_node(
+        "VS_VERSION_INFO",
+        VersionValue::Binary(&fixed),
+        false,
+        &[string_file_info, var_file_info],
+    )
+}
+
+// Разбирает файл .ico и добавляет в .res каждое изображение (RT_ICON)
+// и общий каталог значков (RT_GROUP_ICON) с номером 1.
+fn push_icon_resources(res: &mut Vec<u8>, ico: &[u8]) -> Result<(), String> {
+    const BROKEN: &str = "файл значка повреждён";
+    let read_u16 = |at: usize| {
+        ico.get(at..at + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+    };
+    let read_u32 = |at: usize| {
+        ico.get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    if read_u16(0) != Some(0) || read_u16(2) != Some(1) {
+        return Err("это не файл значка (.ico)".to_string());
+    }
+    let count = read_u16(4).ok_or(BROKEN)?;
+
+    let mut group = Vec::new();
+    push_u16(&mut group, 0); // idReserved
+    push_u16(&mut group, 1); // idType = значок
+    push_u16(&mut group, count);
+    for i in 0..count {
+        let entry = 6 + 16 * i as usize;
+        let header = ico.get(entry..entry + 8).ok_or(BROKEN)?;
+        let size = read_u32(entry + 8).ok_or(BROKEN)? as usize;
+        let offset = read_u32(entry + 12).ok_or(BROKEN)? as usize;
+        let image = ico.get(offset..offset + size).ok_or(BROKEN)?;
+        let icon_id = i + 1;
+        push_resource(res, RT_ICON, icon_id, MEMFLAGS_ICON, image);
+        // GRPICONDIRENTRY: первые 8 байт совпадают с записью .ico,
+        // затем идут размер данных и номер ресурса RT_ICON.
+        group.extend_from_slice(header);
+        push_u32(&mut group, size as u32);
+        push_u16(&mut group, icon_id);
+    }
+    push_resource(res, RT_GROUP_ICON, 1, MEMFLAGS_ICON, &group);
+    Ok(())
+}
+
+// Собирает файл ресурсов Windows и подключает его к компоновке исполняемого файла.
+fn embed_windows_resources(out_dir: &str) {
+    // Готовый .res принимает компоновщик MSVC (link.exe). Для цели windows-gnu
+    // нужен другой формат, поэтому там ресурсы не встраиваются.
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc") {
+        println!(
+            "cargo:warning=Ресурсы Windows встраиваются только для цели MSVC; значок .exe останется стандартным."
+        );
+        return;
+    }
+
+    // Пустая запись в начале — обязательный признак файла .res.
+    let mut res = Vec::new();
+    push_resource(&mut res, 0, 0, 0, &[]);
+
+    let ico_path = "assets/icon.ico";
+    println!("cargo:rerun-if-changed={}", ico_path);
+    match fs::read(ico_path) {
+        Ok(ico) => {
+            if let Err(e) = push_icon_resources(&mut res, &ico) {
+                panic!("Не удалось встроить значок Windows ({}): {}", ico_path, e);
+            }
+        }
+        Err(_) => println!(
+            "cargo:warning=Файл assets/icon.ico не найден, значок .exe останется стандартным."
+        ),
+    }
+
+    push_resource(
+        &mut res,
+        RT_VERSION,
+        1,
+        MEMFLAGS_VERSION,
+        &version_info_resource(),
+    );
+
+    let res_path = Path::new(out_dir).join("pyatorka.res");
+    fs::write(&res_path, &res)
+        .unwrap_or_else(|e| panic!("Не удалось записать файл ресурсов: {}", e));
+    println!("cargo:rustc-link-arg-bins={}", res_path.display());
+}
 
 fn main() {
     let out_dir = env::var("OUT_DIR").expect("Переменная окружения OUT_DIR не задана");
@@ -159,5 +374,9 @@ fn main() {
 
     resolve_icon(&out_dir);
 
-    embed_windows_icon();
+    // Ресурсы .exe нужны только при сборке под Windows. Проверяется целевая ОС
+    // (а не ОС, на которой идёт сборка), поэтому кросс-сборка работает в обе стороны.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        embed_windows_resources(&out_dir);
+    }
 }
