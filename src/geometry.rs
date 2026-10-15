@@ -355,7 +355,7 @@ fn collect_entities<'a>(
                 for i in 0..pts.len().saturating_sub(1) {
                     out.segments.push((pts[i], pts[i + 1]));
                 }
-                if pts.len() > 2 && poly.get_is_closed() {
+                if pts.len() > 2 && poly.is_closed() {
                     out.segments.push((pts[pts.len() - 1], pts[0]));
                 }
                 out.count += 1;
@@ -371,7 +371,7 @@ fn collect_entities<'a>(
                 for i in 0..pts.len().saturating_sub(1) {
                     out.segments.push((pts[i], pts[i + 1]));
                 }
-                if pts.len() > 2 && poly.get_is_closed() {
+                if pts.len() > 2 && poly.is_closed() {
                     out.segments.push((pts[pts.len() - 1], pts[0]));
                 }
                 out.count += 1;

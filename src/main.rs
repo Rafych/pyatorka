@@ -27,6 +27,17 @@ fn draw_scaled_text(
     painter.text(anchor, align, text, egui::FontId::proportional(size), col)
 }
 
+// Рисует окружность обводкой, центрированной по радиусу (egui рисует обводку
+// окружности снаружи радиуса). Если обводка шире диаметра, получается сплошной круг.
+fn circle_stroke_centered(painter: &egui::Painter, center: Pos2, radius: f32, stroke: Stroke) {
+    let half = stroke.width / 2.0;
+    if radius > half {
+        painter.circle_stroke(center, radius - half, stroke);
+    } else {
+        painter.circle_filled(center, radius + half, stroke.color);
+    }
+}
+
 // Рисует поверх текста подчёркивание/надчёркивание/зачёркивание согласно TextStyle.
 fn draw_text_decorations(
     painter: &egui::Painter,
@@ -72,7 +83,7 @@ fn draw_text_decorations(
     }
 }
 
-// Формирует подпись варианта кодировки в диалоге выбора, например "Shift_JIS (Japanese)".
+// Формирует подпись варианта кодировки в диалоге выбора, например "Windows-1251 (кириллица)".
 fn encoding_choice_label(lang: Lang, index: usize) -> String {
     let (code_name, _enc, desc_key) = geometry::ENCODING_CHOICES[index];
     if desc_key.is_empty() {
@@ -157,7 +168,7 @@ struct App {
     slot_b: FileSlot,
     pan: Vec2,
     zoom: f32,
-    error: Option<String>,
+    error: Option<LoadError>,
     needs_fit: bool,
     last_canvas_size: Option<Vec2>,
     center_offset: Pos2,
@@ -172,6 +183,13 @@ struct App {
     pending_encoding: Option<PendingEncoding>,
     scale_slider_dragging: bool,
     subtitle_width_cache: Option<(Lang, f32)>,
+    native_shadow_disabled: bool,
+}
+
+// Ошибка загрузки файла, показываемая в модальном окне.
+struct LoadError {
+    file_name: String,
+    message: String,
 }
 
 // Файл, ожидающий от пользователя ручного выбора кодировки текста.
@@ -204,6 +222,7 @@ impl Default for App {
             pending_encoding: None,
             scale_slider_dragging: false,
             subtitle_width_cache: None,
+            native_shadow_disabled: false,
         }
     }
 }
@@ -211,6 +230,9 @@ impl Default for App {
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         style::apply(&cc.egui_ctx);
+        // Шаг прокрутки колесом мыши (для списков и панелей) — как у холста.
+        cc.egui_ctx
+            .options_mut(|o| o.input_options.line_scroll_speed = POINTS_PER_SCROLL_LINE);
         let mut app = App::default();
 
         if let Some(storage) = cc.storage {
@@ -353,7 +375,14 @@ impl App {
                 self.error = None;
             }
             Err(e) => {
-                self.error = Some(format!("{}: {}", t(self.lang, "load_error"), e));
+                let file_name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string());
+                self.error = Some(LoadError {
+                    file_name,
+                    message: e.to_string(),
+                });
                 self.pending_encoding = None;
             }
         }
@@ -418,73 +447,74 @@ impl eframe::App for App {
     }
 
     // Основной цикл отрисовки кадра: заголовок, панель управления, холст с чертежами,
-    // модальные окна (лицензия, выбор кодировки) и полоса ошибки.
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    // модальные окна (лицензия, ошибка загрузки, выбор кодировки).
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = &ui.ctx().clone();
         self.scale_slider_dragging = false;
 
-        if !self.show_license && self.pending_encoding.is_none() {
+        if !self.native_shadow_disabled {
+            disable_native_shadow(frame);
+            self.native_shadow_disabled = true;
+        }
+
+        if !self.modal_open() {
             handle_resize_edges(ctx);
         }
 
-        self.custom_title_bar(ctx);
+        self.custom_title_bar(ui);
 
         self.license_window(ctx);
+        self.error_window(ctx);
         self.encoding_choice_window(ctx);
-
-        if let Some(err) = self.error.as_deref() {
-            egui::TopBottomPanel::top("error_bar")
-                .frame(egui::Frame::none().fill(Color32::from_rgb(250, 250, 251)))
-                .show(ctx, |ui| {
-                    ui.add_space(6.0);
-                    egui::Frame::none()
-                        .fill(Color32::from_rgb(255, 235, 234))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(255, 200, 197)))
-                        .rounding(egui::Rounding::same(10.0))
-                        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
-                        .show(ui, |ui| {
-                            ui.colored_label(Color32::from_rgb(209, 40, 30), err);
-                        });
-                    ui.add_space(6.0);
-                });
-        }
 
         self.update_diff_cache(ctx);
 
-        // Ширина левой панели управления фиксирована.
+        // Ширина содержимого левой панели управления фиксирована. Если какая-то строка
+        // (например, при длинных подписях) не помещается, панель расширяется под неё.
         const PANEL_FIXED_WIDTH: f32 = 280.0;
-        let panel_width = PANEL_FIXED_WIDTH;
+        // Размер Panel задаётся вместе с отступами рамки (14 px с каждой стороны).
+        let panel_width = PANEL_FIXED_WIDTH + 14.0 * 2.0;
 
-        let side_frame = egui::Frame::none()
+        let side_frame = egui::Frame::new()
             .fill(Color32::from_rgb(246, 246, 248))
-            .inner_margin(egui::Margin::same(14.0))
-            .rounding(egui::Rounding {
-                nw: 0.0,
-                ne: 0.0,
-                sw: 14.0,
-                se: 0.0,
+            // Обводка (1 px) в egui входит в размер рамки, поэтому внутренний
+            // отступ уменьшен на её толщину — содержимое остаётся на прежнем месте.
+            .inner_margin(egui::Margin::same(13))
+            .corner_radius(egui::CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: 14,
+                se: 0,
             })
             .stroke(Stroke::new(1.0, Color32::from_rgb(228, 228, 232)));
 
-        egui::SidePanel::left("control_panel")
+        let side_panel_id = egui::Id::new("control_panel");
+        let size_before = panel_outer_rect(ctx, side_panel_id);
+        let side_panel = egui::Panel::left(side_panel_id)
             .resizable(false)
-            .exact_width(panel_width)
+            .show_separator_line(false)
+            .min_size(panel_width)
+            .default_size(panel_width)
             .frame(side_frame)
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
+                ui.set_max_width(PANEL_FIXED_WIDTH);
                 self.control_panel_body(ui);
             });
+        paint_panel_separator(ui, side_panel.response.rect, PanelEdge::Right);
+        discard_if_panel_resized(ctx, side_panel_id, size_before, 0);
 
-        let central_frame = egui::Frame::none()
+        let central_frame = egui::Frame::new()
             .fill(Color32::from_rgb(252, 252, 253))
-            .rounding(egui::Rounding {
-                nw: 0.0,
-                ne: 0.0,
-                sw: 0.0,
-                se: 14.0,
+            .corner_radius(egui::CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: 0,
+                se: 14,
             })
             .stroke(Stroke::new(1.0, Color32::from_rgb(228, 228, 232)));
         egui::CentralPanel::default()
             .frame(central_frame)
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 let rect = ui.available_rect_before_wrap();
 
                 // При первом кадре (или после сброса) подгоняем масштаб под холст;
@@ -555,15 +585,10 @@ impl eframe::App for App {
 
                 let cursor_in_canvas = response.hovered();
 
-                let scroll = if cursor_in_canvas {
-                    ui.input(|i| i.raw_scroll_delta.y)
+                let (scroll, pinch) = if cursor_in_canvas {
+                    ui.input(wheel_and_pinch)
                 } else {
-                    0.0
-                };
-                let pinch = if cursor_in_canvas {
-                    ui.input(|i| i.zoom_delta())
-                } else {
-                    1.0
+                    (0.0, 1.0)
                 };
 
                 // Колесо мыши и пинч-жест объединяются в общий коэффициент масштабирования.
@@ -595,11 +620,11 @@ impl eframe::App for App {
 
                 painter.rect_filled(
                     rect,
-                    egui::Rounding {
-                        nw: 0.0,
-                        ne: 0.0,
-                        sw: 0.0,
-                        se: 14.0,
+                    egui::CornerRadius {
+                        nw: 0,
+                        ne: 0,
+                        sw: 0,
+                        se: 14,
                     },
                     Color32::from_rgb(252, 252, 253),
                 );
@@ -718,7 +743,7 @@ impl eframe::App for App {
                             };
 
                             // Отрисовка примитивов слота: цвет уже учитывает прозрачность.
-                            let col = slot.color.linear_multiply(slot.opacity);
+                            let col = style::linear_multiply(slot.color, slot.opacity);
                             let stroke = Stroke::new(1.6, col);
                             for (a, b) in &g.segments {
                                 let sa = to_screen(*a);
@@ -748,7 +773,7 @@ impl eframe::App for App {
                                 if !circle_visible(view, sc, sr) {
                                     continue;
                                 }
-                                painter.circle_stroke(sc, sr, stroke);
+                                circle_stroke_centered(&painter, sc, sr, stroke);
                             }
 
                             for p in &g.points {
@@ -799,9 +824,11 @@ impl eframe::App for App {
                     let dragging_now = self.scale_slider_dragging;
                     if self.diff_enabled && !dragging_now {
                         if let Some(d) = &self.diff_cache {
-                            let glow_a = Stroke::new(6.0, self.diff_color_a.linear_multiply(0.30));
+                            let glow_a =
+                                Stroke::new(6.0, style::linear_multiply(self.diff_color_a, 0.30));
                             let core_a = Stroke::new(2.2, self.diff_color_a);
-                            let glow_b = Stroke::new(6.0, self.diff_color_b.linear_multiply(0.30));
+                            let glow_b =
+                                Stroke::new(6.0, style::linear_multiply(self.diff_color_b, 0.30));
                             let core_b = Stroke::new(2.2, self.diff_color_b);
 
                             if self.diff_a_visible {
@@ -827,7 +854,7 @@ impl eframe::App for App {
                                     let sc = to_screen_prescaled(*c);
                                     let sr = r * scale;
                                     if circle_visible(view, sc, sr) {
-                                        painter.circle_stroke(sc, sr, glow_a);
+                                        circle_stroke_centered(&painter, sc, sr, glow_a);
                                     }
                                 }
                             }
@@ -836,7 +863,7 @@ impl eframe::App for App {
                                     let sc = to_screen_prescaled(*c);
                                     let sr = r * scale;
                                     if circle_visible(view, sc, sr) {
-                                        painter.circle_stroke(sc, sr, glow_b);
+                                        circle_stroke_centered(&painter, sc, sr, glow_b);
                                     }
                                 }
                             }
@@ -864,7 +891,7 @@ impl eframe::App for App {
                                     let sc = to_screen_prescaled(*c);
                                     let sr = r * scale;
                                     if circle_visible(view, sc, sr) {
-                                        painter.circle_stroke(sc, sr, core_a);
+                                        circle_stroke_centered(&painter, sc, sr, core_a);
                                     }
                                 }
                             }
@@ -873,7 +900,7 @@ impl eframe::App for App {
                                     let sc = to_screen_prescaled(*c);
                                     let sr = r * scale;
                                     if circle_visible(view, sc, sr) {
-                                        painter.circle_stroke(sc, sr, core_b);
+                                        circle_stroke_centered(&painter, sc, sr, core_b);
                                     }
                                 }
                             }
@@ -887,7 +914,7 @@ impl eframe::App for App {
                                     painter.circle_filled(
                                         sp,
                                         6.5,
-                                        self.diff_color_a.linear_multiply(0.30),
+                                        style::linear_multiply(self.diff_color_a, 0.30),
                                     );
                                     painter.circle_filled(sp, 3.0, self.diff_color_a);
                                 }
@@ -901,7 +928,7 @@ impl eframe::App for App {
                                     painter.circle_filled(
                                         sp,
                                         6.5,
-                                        self.diff_color_b.linear_multiply(0.30),
+                                        style::linear_multiply(self.diff_color_b, 0.30),
                                     );
                                     painter.circle_filled(sp, 3.0, self.diff_color_b);
                                 }
@@ -932,14 +959,15 @@ impl eframe::App for App {
 
                                 let size = px_size.round().max(1.0);
                                 let font_id = egui::FontId::proportional(size);
-                                let galley =
-                                    ui.fonts(|f| f.layout_no_wrap(s.clone(), font_id.clone(), col));
+                                let galley = ui.fonts_mut(|f| {
+                                    f.layout_no_wrap(s.clone(), font_id.clone(), col)
+                                });
                                 let text_rect = egui::Align2::LEFT_BOTTOM
                                     .anchor_rect(Rect::from_min_size(sp, galley.size()));
                                 painter.rect_filled(
                                     text_rect.expand(2.0),
-                                    egui::Rounding::same(3.0),
-                                    col.linear_multiply(0.25),
+                                    egui::CornerRadius::same(3),
+                                    style::linear_multiply(col, 0.25),
                                 );
                                 painter.text(sp, egui::Align2::LEFT_BOTTOM, s, font_id, col);
                                 draw_text_decorations(&painter, text_rect, style, col);
@@ -954,31 +982,34 @@ impl eframe::App for App {
 impl App {
     // Собственная (без системной рамки) панель заголовка окна: кнопки
     // светофора macOS-стиля, название приложения, переключатель языка и кнопка лицензии.
-    fn custom_title_bar(&mut self, ctx: &egui::Context) {
+    fn custom_title_bar(&mut self, ui: &mut egui::Ui) {
+        let ctx = &ui.ctx().clone();
         let bar_height = 40.0;
 
-        let frame = egui::Frame::none()
+        let frame = egui::Frame::new()
             .fill(Color32::from_rgb(250, 250, 251))
-            .rounding(egui::Rounding {
-                nw: 14.0,
-                ne: 14.0,
-                sw: 0.0,
-                se: 0.0,
+            .corner_radius(egui::CornerRadius {
+                nw: 14,
+                ne: 14,
+                sw: 0,
+                se: 0,
             })
             .stroke(Stroke::new(1.0, Color32::from_rgb(228, 228, 232)))
             .inner_margin(egui::Margin {
-                left: 14.0,
-                right: 4.0,
-                top: 0.0,
-                bottom: 0.0,
+                left: 13,
+                right: 3,
+                top: 0,
+                bottom: 0,
             });
 
-        let title_bar_interactive = !self.show_license;
+        let title_bar_interactive = !self.show_license && self.error.is_none();
 
-        egui::TopBottomPanel::top("title_bar")
-            .exact_height(bar_height)
+        let title_bar = egui::Panel::top("title_bar")
+            .resizable(false)
+            .show_separator_line(false)
+            .exact_size(bar_height)
             .frame(frame)
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 ui.add_enabled_ui(title_bar_interactive, |ui| {
                     let bar_rect = ui.max_rect();
 
@@ -1041,7 +1072,7 @@ impl App {
                             let subtitle_width = match self.subtitle_width_cache {
                                 Some((lang, w)) if lang == self.lang => w,
                                 _ => {
-                                    let galley = ui.fonts(|f| {
+                                    let galley = ui.fonts_mut(|f| {
                                         f.layout_no_wrap(
                                             subtitle_text.to_string(),
                                             egui::FontId::proportional(12.0),
@@ -1077,9 +1108,9 @@ impl App {
                         ),
                         Vec2::new(combo_width, combo_height),
                     );
-                    ui.allocate_ui_at_rect(combo_rect, |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(combo_rect), |ui| {
                         ui.style_mut().spacing.button_padding = egui::vec2(8.0, 4.0);
-                        egui::ComboBox::from_id_source("lang_selector")
+                        egui::ComboBox::from_id_salt("lang_selector")
                             .width(combo_width)
                             .selected_text(self.lang.label())
                             .show_ui(ui, |ui| {
@@ -1090,7 +1121,7 @@ impl App {
                     });
 
                     let license_resp = ui
-                        .allocate_ui_at_rect(license_rect, |ui| {
+                        .scope_builder(egui::UiBuilder::new().max_rect(license_rect), |ui| {
                             license_button(ui, license_diameter)
                         })
                         .inner;
@@ -1102,6 +1133,7 @@ impl App {
                     let _ = left_end;
                 });
             });
+        paint_panel_separator(ui, title_bar.response.rect, PanelEdge::Bottom);
     }
 
     // Модальный диалог выбора кодировки текста, показывается, когда
@@ -1111,7 +1143,7 @@ impl App {
             return;
         };
         let lang = self.lang;
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
 
         const MARGIN: f32 = 24.0;
         let window_size = Vec2::new(
@@ -1140,15 +1172,15 @@ impl App {
                 ui.painter()
                     .rect_filled(screen, 0.0, Color32::from_black_alpha(90));
 
-                ui.allocate_ui_at_rect(win_rect, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(win_rect), |ui| {
                     ui.set_width(window_size.x);
                     ui.set_height(window_size.y);
 
-                    egui::Frame::none()
+                    egui::Frame::new()
                         .fill(Color32::from_rgb(246, 246, 248))
-                        .rounding(egui::Rounding::same(14.0))
+                        .corner_radius(egui::CornerRadius::same(14))
                         .stroke(Stroke::new(1.0, Color32::from_rgb(228, 228, 232)))
-                        .inner_margin(egui::Margin::same(18.0))
+                        .inner_margin(egui::Margin::same(17))
                         .show(ui, |ui| {
                             ui.set_width(window_size.x - 36.0);
 
@@ -1222,6 +1254,11 @@ impl App {
         }
     }
 
+    // Открыто ли какое-либо модальное окно (тогда окно нельзя растягивать за края).
+    fn modal_open(&self) -> bool {
+        self.show_license || self.error.is_some() || self.pending_encoding.is_some()
+    }
+
     // Модальное окно со сведениями о лицензиях используемых библиотек и шрифтов.
     fn license_window(&mut self, ctx: &egui::Context) {
         if !self.show_license {
@@ -1229,178 +1266,123 @@ impl App {
         }
 
         let lang = self.lang;
-        let screen = ctx.screen_rect();
+        let closed = modal_window(
+            ctx,
+            "license",
+            t(lang, "license_title"),
+            Vec2::new(460.0, 480.0),
+            |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(t(lang, "license_libraries")).strong());
+                        ui.add_space(4.0);
+                        for (name, version, license) in LIBRARY_LICENSES {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(*name).strong());
+                                ui.weak(format!("v{}", version));
+                                ui.label(format!("— {}", license));
+                            });
+                        }
 
-        const MARGIN: f32 = 24.0;
-        let window_size = Vec2::new(
-            460.0_f32.min((screen.width() - MARGIN * 2.0).max(240.0)),
-            480.0_f32.min((screen.height() - MARGIN * 2.0).max(260.0)),
+                        ui.add_space(14.0);
+                        ui.separator();
+                        ui.add_space(10.0);
+
+                        ui.label(egui::RichText::new(t(lang, "license_fonts")).strong());
+                        ui.add_space(4.0);
+                        ui.label(t(lang, "license_fonts_body"));
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.label("•");
+                            ui.label("Google Sans — SIL Open Font License 1.1 (Google LLC)");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("•");
+                            ui.label("Noto Sans JP — SIL Open Font License 1.1 (Google LLC)");
+                        });
+                        ui.add_space(4.0);
+                        ui.hyperlink_to("openfontlicense.org", "https://openfontlicense.org");
+
+                        ui.add_space(14.0);
+                        ui.separator();
+                        ui.add_space(10.0);
+
+                        ui.label(egui::RichText::new(t(lang, "license_software")).strong());
+                        ui.add_space(4.0);
+                        ui.label(t(lang, "license_software_body"));
+                        ui.add_space(6.0);
+                        ui.hyperlink_to(
+                            "github.com/Rafych/pyatorka",
+                            "https://github.com/Rafych/pyatorka",
+                        );
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label("•");
+                            ui.label("License: MIT License");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("•");
+                            ui.label("Author: Rafych");
+                        });
+
+                        ui.add_space(14.0);
+                    });
+            },
         );
 
-        let win_rect = Rect::from_center_size(screen.center(), window_size);
-        let mut close_clicked = false;
-
-        egui::Area::new(egui::Id::new("license_modal_layer"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(Pos2::ZERO)
-            .interactable(true)
-            .show(ctx, |ui| {
-                ui.allocate_response(screen.size(), egui::Sense::click_and_drag());
-                ui.painter()
-                    .rect_filled(screen, 0.0, Color32::from_black_alpha(90));
-
-                ui.allocate_ui_at_rect(win_rect, |ui| {
-                    ui.set_width(window_size.x);
-                    ui.set_height(window_size.y);
-
-                    egui::Frame::none()
-                        .fill(Color32::from_rgb(246, 246, 248))
-                        .rounding(egui::Rounding::same(14.0))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(228, 228, 232)))
-                        .show(ui, |ui| {
-                            ui.set_width(window_size.x);
-                            ui.set_height(window_size.y);
-
-                            let bar_height = 36.0;
-
-                            let bar_frame = egui::Frame::none()
-                                .fill(Color32::from_rgb(250, 250, 251))
-                                .rounding(egui::Rounding {
-                                    nw: 14.0,
-                                    ne: 14.0,
-                                    sw: 0.0,
-                                    se: 0.0,
-                                });
-
-                            egui::TopBottomPanel::top("license_title_bar")
-                                .exact_height(bar_height)
-                                .frame(bar_frame)
-                                .show_inside(ui, |ui| {
-                                    let bar_rect = ui.max_rect();
-
-                                    ui.painter().text(
-                                        bar_rect.center(),
-                                        egui::Align2::CENTER_CENTER,
-                                        t(lang, "license_title"),
-                                        egui::FontId::proportional(14.0),
-                                        Color32::from_rgb(40, 40, 44),
-                                    );
-
-                                    let close_diameter = 22.0;
-                                    let right_margin = 8.0;
-                                    let close_rect = Rect::from_min_size(
-                                        Pos2::new(
-                                            bar_rect.right() - right_margin - close_diameter,
-                                            bar_rect.center().y - close_diameter / 2.0,
-                                        ),
-                                        Vec2::splat(close_diameter),
-                                    );
-                                    let resp = ui
-                                        .allocate_ui_at_rect(close_rect, |ui| {
-                                            close_x_button(ui, close_diameter)
-                                        })
-                                        .inner;
-                                    if resp.clicked() {
-                                        close_clicked = true;
-                                    }
-                                });
-
-                            let body_rounding = egui::Rounding {
-                                nw: 0.0,
-                                ne: 0.0,
-                                sw: 14.0,
-                                se: 14.0,
-                            };
-                            let body_frame = egui::Frame::none()
-                                .fill(Color32::from_rgb(246, 246, 248))
-                                .rounding(body_rounding)
-                                .inner_margin(egui::Margin::same(16.0));
-
-                            egui::CentralPanel::default()
-                                .frame(body_frame)
-                                .show_inside(ui, |ui| {
-                                    egui::ScrollArea::vertical()
-                                        .auto_shrink([false, false])
-                                        .scroll_bar_visibility(
-                                            egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
-                                        )
-                                        .show(ui, |ui| {
-                                            ui.label(
-                                                egui::RichText::new(t(lang, "license_libraries"))
-                                                    .strong(),
-                                            );
-                                            ui.add_space(4.0);
-                                            for (name, version, license) in LIBRARY_LICENSES {
-                                                ui.horizontal(|ui| {
-                                                    ui.label(egui::RichText::new(*name).strong());
-                                                    ui.weak(format!("v{}", version));
-                                                    ui.label(format!("— {}", license));
-                                                });
-                                            }
-
-                                            ui.add_space(14.0);
-                                            ui.separator();
-                                            ui.add_space(10.0);
-
-                                            ui.label(
-                                                egui::RichText::new(t(lang, "license_fonts"))
-                                                    .strong(),
-                                            );
-                                            ui.add_space(4.0);
-                                            ui.label(t(lang, "license_fonts_body"));
-                                            ui.add_space(6.0);
-                                            ui.horizontal(|ui| {
-                                                ui.label("•");
-                                                ui.label(
-                                            "Google Sans — SIL Open Font License 1.1 (Google LLC)",
-                                        );
-                                            });
-                                            ui.horizontal(|ui| {
-                                                ui.label("•");
-                                                ui.label(
-                                            "Noto Sans JP — SIL Open Font License 1.1 (Google LLC)",
-                                        );
-                                            });
-                                            ui.add_space(4.0);
-                                            ui.hyperlink_to(
-                                                "openfontlicense.org",
-                                                "https://openfontlicense.org",
-                                            );
-
-                                            ui.add_space(14.0);
-                                            ui.separator();
-                                            ui.add_space(10.0);
-
-                                            ui.label(
-                                                egui::RichText::new(t(lang, "license_software"))
-                                                    .strong(),
-                                            );
-                                            ui.add_space(4.0);
-                                            ui.label(t(lang, "license_software_body"));
-                                            ui.add_space(6.0);
-                                            ui.hyperlink_to(
-                                                "github.com/Rafych/pyatorka",
-                                                "https://github.com/Rafych/pyatorka",
-                                            );
-                                            ui.add_space(4.0);
-                                            ui.horizontal(|ui| {
-                                                ui.label("•");
-                                                ui.label("License: MIT License");
-                                            });
-                                            ui.horizontal(|ui| {
-                                                ui.label("•");
-                                                ui.label("Author: Rafych");
-                                            });
-
-                                            ui.add_space(14.0);
-                                        });
-                                });
-                        });
-                });
-            });
-
-        if close_clicked || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if closed {
             self.show_license = false;
+        }
+    }
+
+    // Модальное окно с сообщением об ошибке загрузки файла.
+    fn error_window(&mut self, ctx: &egui::Context) {
+        let Some(error) = &self.error else {
+            return;
+        };
+
+        let lang = self.lang;
+        let mut ok_clicked = false;
+        let closed = modal_window(
+            ctx,
+            "load_error",
+            t(lang, "load_error"),
+            Vec2::new(420.0, 240.0),
+            |ui| {
+                const BUTTON_HEIGHT: f32 = 32.0;
+                let text_height =
+                    (ui.available_height() - BUTTON_HEIGHT - ui.spacing().item_spacing.y).max(0.0);
+                egui::ScrollArea::vertical()
+                    .max_height(text_height)
+                    .auto_shrink([false, false])
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(error.file_name.as_str()).small().weak());
+                        ui.add_space(4.0);
+                        ui.colored_label(Color32::from_rgb(209, 40, 30), error.message.as_str());
+                    });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_sized(
+                            [96.0, BUTTON_HEIGHT],
+                            egui::Button::new(
+                                egui::RichText::new(t(lang, "error_ok")).color(Color32::WHITE),
+                            )
+                            .fill(style::ACCENT)
+                            .corner_radius(egui::CornerRadius::same(8)),
+                        )
+                        .clicked()
+                    {
+                        ok_clicked = true;
+                    }
+                });
+            },
+        );
+
+        if closed || ok_clicked || ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+            self.error = None;
         }
     }
 
@@ -1466,11 +1448,11 @@ impl App {
             t(self.lang, "file_b")
         };
 
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(Color32::from_rgb(255, 255, 255))
-            .rounding(egui::Rounding::same(10.0))
+            .corner_radius(egui::CornerRadius::same(10))
             .stroke(Stroke::new(1.0, Color32::from_rgb(230, 230, 235)))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(11))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
@@ -1496,7 +1478,7 @@ impl App {
                             egui::RichText::new(t(self.lang, "open_file")).color(Color32::WHITE),
                         )
                         .fill(style::ACCENT)
-                        .rounding(egui::Rounding::same(8.0)),
+                        .corner_radius(egui::CornerRadius::same(8)),
                     )
                     .clicked();
 
@@ -1575,7 +1557,7 @@ impl App {
                     Some(i) => encoding_choice_label(self.lang, i),
                 };
 
-                egui::ComboBox::from_id_source(("encoding_combo", idx))
+                egui::ComboBox::from_id_salt(("encoding_combo", idx))
                     .selected_text(current_label)
                     .width(narrow_width)
                     .show_ui(ui, |ui| {
@@ -1619,11 +1601,11 @@ impl App {
 
     // Панель настроек подсветки различий: включение, видимость и цвет для A/B.
     fn diff_panel(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(Color32::from_rgb(255, 255, 255))
-            .rounding(egui::Rounding::same(10.0))
+            .corner_radius(egui::CornerRadius::same(10))
             .stroke(Stroke::new(1.0, Color32::from_rgb(230, 230, 235)))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(11))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
 
@@ -1698,6 +1680,214 @@ impl App {
     }
 }
 
+// Отключает системную тень и рамку Windows, которые eframe включает для окон
+// без рамки: окно рисует собственные скруглённые углы и обводку.
+#[cfg(windows)]
+fn disable_native_shadow(frame: &eframe::Frame) {
+    use winit::platform::windows::WindowExtWindows as _;
+    if let Some(window) = frame.winit_window() {
+        window.set_undecorated_shadow(false);
+    }
+}
+
+#[cfg(not(windows))]
+fn disable_native_shadow(_frame: &eframe::Frame) {}
+
+// Край панели, вдоль которого рисуется разделительная линия.
+enum PanelEdge {
+    Bottom,
+    Right,
+}
+
+// Рисует тонкую разделительную линию вдоль края панели — изнутри панели, поверх
+// обводки её рамки (так выглядели панели в прежнем оформлении). Встроенная линия
+// egui рисуется снаружи панели, где сквозь зазор виден прозрачный фон окна.
+fn paint_panel_separator(ui: &egui::Ui, rect: Rect, edge: PanelEdge) {
+    let painter = ui.painter();
+    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+    match edge {
+        PanelEdge::Bottom => {
+            let y = painter.round_to_pixel_center(rect.bottom() - 1.0);
+            painter.hline(rect.x_range(), y, stroke);
+        }
+        PanelEdge::Right => {
+            let x = painter.round_to_pixel_center(rect.right() - 1.0);
+            painter.vline(x, rect.y_range(), stroke);
+        }
+    }
+}
+
+// Внешний прямоугольник панели, сохранённый egui в предыдущем кадре.
+fn panel_outer_rect(ctx: &egui::Context, id: egui::Id) -> Option<Rect> {
+    egui::containers::panel::PanelState::load(ctx, id).map(|s| s.outer_rect)
+}
+
+// Панель, подстраивающаяся под содержимое, применяет новый размер только со
+// следующего кадра (до этого содержимое обрезается). Если размер вдоль оси `axis`
+// (0 — ширина, 1 — высота) изменился, кадр сразу перерисовывается заново,
+// чтобы обрезанное состояние не попало на экран.
+fn discard_if_panel_resized(ctx: &egui::Context, id: egui::Id, before: Option<Rect>, axis: usize) {
+    let after = panel_outer_rect(ctx, id);
+    let resized = match (before, after) {
+        (Some(b), Some(a)) => (b.size()[axis] - a.size()[axis]).abs() > 0.5,
+        (None, Some(_)) => true,
+        _ => false,
+    };
+    if resized {
+        ctx.request_discard("размер панели изменён под её содержимое");
+    }
+}
+
+// Сколько точек (points) прокрутки соответствует одной строке колеса мыши.
+const POINTS_PER_SCROLL_LINE: f32 = 50.0;
+
+// Возвращает за текущий кадр вертикальную прокрутку колесом (в points, без сглаживания)
+// и коэффициент масштабирования жестом/Ctrl+колесом.
+// Колесо с Ctrl (Cmd) работает как масштабирование, с Shift — как горизонтальная
+// прокрутка (вертикальная составляющая тогда равна нулю).
+fn wheel_and_pinch(i: &egui::InputState) -> (f32, f32) {
+    let mut scroll_y = 0.0_f32;
+    let mut zoom = 1.0_f32;
+    for event in &i.events {
+        match event {
+            egui::Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+                ..
+            } => {
+                let delta = match unit {
+                    egui::MouseWheelUnit::Point => *delta,
+                    egui::MouseWheelUnit::Line => *delta * POINTS_PER_SCROLL_LINE,
+                    egui::MouseWheelUnit::Page => *delta * i.viewport_rect().height(),
+                };
+                if modifiers.ctrl || modifiers.command {
+                    zoom *= (delta.y / 200.0).exp();
+                } else if !modifiers.shift {
+                    scroll_y += delta.y;
+                }
+            }
+            egui::Event::Zoom(factor) => zoom *= *factor,
+            _ => {}
+        }
+    }
+    // Пинч на сенсорном экране (несколько касаний) заменяет остальные источники масштаба.
+    let pinch = i.multi_touch().map_or(zoom, |touch| touch.zoom_delta);
+    (scroll_y, pinch)
+}
+
+// Модальное окно в общем стиле приложения: затемнение фона, рамка со скруглёнными
+// углами, заголовок с кнопкой закрытия и область содержимого `add_body`.
+// Возвращает true, если окно закрыли (крестиком или клавишей Escape).
+fn modal_window(
+    ctx: &egui::Context,
+    id: &str,
+    title: &str,
+    size: Vec2,
+    add_body: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    let screen = ctx.content_rect();
+
+    const MARGIN: f32 = 24.0;
+    let window_size = Vec2::new(
+        size.x.min((screen.width() - MARGIN * 2.0).max(240.0)),
+        size.y.min((screen.height() - MARGIN * 2.0).max(260.0)),
+    );
+
+    let win_rect = Rect::from_center_size(screen.center(), window_size);
+    let mut close_clicked = false;
+
+    egui::Area::new(egui::Id::new(id).with("modal_layer"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(Pos2::ZERO)
+        .interactable(true)
+        .show(ctx, |ui| {
+            ui.allocate_response(screen.size(), egui::Sense::click_and_drag());
+            ui.painter()
+                .rect_filled(screen, 0.0, Color32::from_black_alpha(90));
+
+            ui.scope_builder(egui::UiBuilder::new().max_rect(win_rect), |ui| {
+                ui.set_width(window_size.x);
+                ui.set_height(window_size.y);
+
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(246, 246, 248))
+                    .corner_radius(egui::CornerRadius::same(14))
+                    .stroke(Stroke::new(1.0, Color32::from_rgb(228, 228, 232)))
+                    .show(ui, |ui| {
+                        // Обводка (1 px с каждой стороны) входит в размер рамки.
+                        ui.set_width(window_size.x - 2.0);
+                        ui.set_height(window_size.y - 2.0);
+
+                        let bar_height = 36.0;
+
+                        let bar_frame = egui::Frame::new()
+                            .fill(Color32::from_rgb(250, 250, 251))
+                            .corner_radius(egui::CornerRadius {
+                                nw: 14,
+                                ne: 14,
+                                sw: 0,
+                                se: 0,
+                            });
+
+                        let title_bar = egui::Panel::top(egui::Id::new(id).with("modal_title_bar"))
+                            .resizable(false)
+                            .show_separator_line(false)
+                            .exact_size(bar_height)
+                            .frame(bar_frame)
+                            .show(ui, |ui| {
+                                let bar_rect = ui.max_rect();
+
+                                ui.painter().text(
+                                    bar_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    title,
+                                    egui::FontId::proportional(14.0),
+                                    Color32::from_rgb(40, 40, 44),
+                                );
+
+                                let close_diameter = 22.0;
+                                let right_margin = 8.0;
+                                let close_rect = Rect::from_min_size(
+                                    Pos2::new(
+                                        bar_rect.right() - right_margin - close_diameter,
+                                        bar_rect.center().y - close_diameter / 2.0,
+                                    ),
+                                    Vec2::splat(close_diameter),
+                                );
+                                let resp = ui
+                                    .scope_builder(
+                                        egui::UiBuilder::new().max_rect(close_rect),
+                                        |ui| close_x_button(ui, close_diameter),
+                                    )
+                                    .inner;
+                                if resp.clicked() {
+                                    close_clicked = true;
+                                }
+                            });
+                        paint_panel_separator(ui, title_bar.response.rect, PanelEdge::Bottom);
+
+                        let body_rounding = egui::CornerRadius {
+                            nw: 0,
+                            ne: 0,
+                            sw: 14,
+                            se: 14,
+                        };
+                        let body_frame = egui::Frame::new()
+                            .fill(Color32::from_rgb(246, 246, 248))
+                            .corner_radius(body_rounding)
+                            .inner_margin(egui::Margin::same(16));
+
+                        egui::CentralPanel::default()
+                            .frame(body_frame)
+                            .show(ui, add_body);
+                    });
+            });
+        });
+
+    close_clicked || ctx.input(|i| i.key_pressed(egui::Key::Escape))
+}
+
 // Реализует изменение размера окна без системной рамки: определяет,
 // когда курсор находится у края окна, и запускает системный resize-drag.
 fn handle_resize_edges(ctx: &egui::Context) {
@@ -1706,7 +1896,7 @@ fn handle_resize_edges(ctx: &egui::Context) {
         return;
     }
 
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     const BORDER: f32 = 8.0;
     const MIN_SIZE: Vec2 = Vec2::new(420.0, 480.0);
 
@@ -1743,13 +1933,13 @@ fn handle_resize_edges(ctx: &egui::Context) {
         );
 
         if east.hovered() || east.dragged() {
-            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeEast);
+            ui.set_cursor_icon(egui::CursorIcon::ResizeEast);
         }
         if south.hovered() || south.dragged() {
-            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeSouth);
+            ui.set_cursor_icon(egui::CursorIcon::ResizeSouth);
         }
         if corner.hovered() || corner.dragged() {
-            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeSouthEast);
+            ui.set_cursor_icon(egui::CursorIcon::ResizeSouthEast);
         }
 
         let mut new_size = screen.size();
@@ -1788,7 +1978,7 @@ fn license_button(ui: &mut egui::Ui, diameter: f32) -> egui::Response {
 
     let center = rect.center();
     let r = diameter / 2.0;
-    painter.circle_stroke(center, r - 1.0, Stroke::new(1.4, color));
+    circle_stroke_centered(painter, center, r - 1.0, Stroke::new(1.4, color));
 
     let dot_r = 1.3;
     let bar_top = center.y - r * 0.45;
@@ -1857,7 +2047,12 @@ fn traffic_light_button(ui: &mut egui::Ui, color: Color32, kind: u8) -> bool {
             }
             _ => {
                 let r = 2.6;
-                painter.rect_stroke(Rect::from_center_size(c, Vec2::splat(r * 2.0)), 1.0, stroke);
+                painter.rect_stroke(
+                    Rect::from_center_size(c, Vec2::splat(r * 2.0)),
+                    1.0,
+                    stroke,
+                    egui::StrokeKind::Middle,
+                );
             }
         }
     }
@@ -1866,12 +2061,12 @@ fn traffic_light_button(ui: &mut egui::Ui, color: Color32, kind: u8) -> bool {
 
 // Список сторонних библиотек и их лицензий для окна "О программе".
 const LIBRARY_LICENSES: &[(&str, &str, &str)] = &[
-    ("eframe", "0.27", "MIT OR Apache-2.0"),
-    ("egui", "0.27", "MIT OR Apache-2.0"),
-    ("dxf", "0.5", "MIT"),
-    ("rfd", "0.14", "MIT"),
+    ("eframe", "0.36", "MIT OR Apache-2.0"),
+    ("egui", "0.36", "MIT OR Apache-2.0"),
+    ("dxf", "0.6", "MIT"),
+    ("rfd", "0.17", "MIT"),
     ("serde", "1", "MIT OR Apache-2.0"),
-    ("image", "0.24", "MIT"),
+    ("image", "0.25", "MIT OR Apache-2.0"),
     ("winres", "0.1", "MIT (только Windows)"),
 ];
 
@@ -1913,5 +2108,9 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
-    eframe::run_native("Пятёрка", options, Box::new(|cc| Box::new(App::new(cc))))
+    eframe::run_native(
+        "Пятёрка",
+        options,
+        Box::new(|cc| Ok(Box::new(App::new(cc)))),
+    )
 }

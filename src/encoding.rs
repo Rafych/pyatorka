@@ -26,10 +26,22 @@ pub enum DetectOutcome {
 // Список кодировок, которые пользователь может выбрать вручную в диалоге.
 // Третий элемент кортежа — ключ локализации для короткого описания языка
 // (пустая строка, если описание не требуется).
+// Порядок: Юникод, затем кодировки для английского, русского и японского
+// языков (en → ru → ja), затем остальные языки.
 pub const SELECTABLE_ENCODINGS: &[(&str, &'static Encoding, &str)] = &[
     ("UTF-8", encoding_rs::UTF_8, ""),
     ("UTF-16LE", encoding_rs::UTF_16LE, ""),
     ("UTF-16BE", encoding_rs::UTF_16BE, ""),
+    (
+        "Windows-1252",
+        encoding_rs::WINDOWS_1252,
+        "encoding_desc_western_european",
+    ),
+    (
+        "Windows-1251",
+        encoding_rs::WINDOWS_1251,
+        "encoding_desc_cyrillic",
+    ),
     (
         "Shift_JIS",
         encoding_rs::SHIFT_JIS,
@@ -43,16 +55,6 @@ pub const SELECTABLE_ENCODINGS: &[(&str, &'static Encoding, &str)] = &[
         "encoding_desc_traditional_chinese",
     ),
     ("EUC-KR", encoding_rs::EUC_KR, "encoding_desc_korean"),
-    (
-        "Windows-1251",
-        encoding_rs::WINDOWS_1251,
-        "encoding_desc_cyrillic",
-    ),
-    (
-        "Windows-1252",
-        encoding_rs::WINDOWS_1252,
-        "encoding_desc_western_european",
-    ),
 ];
 
 // Находит индекс кодировки в SELECTABLE_ENCODINGS, чтобы можно было заранее
@@ -91,9 +93,9 @@ pub fn detect_and_decode(bytes: &[u8]) -> DetectOutcome {
         };
     }
 
-    let mut detector = chardetng::EncodingDetector::new();
+    let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Allow);
     detector.feed(bytes, true);
-    let guessed = detector.guess(None, true);
+    let guessed = detector.guess(None, chardetng::Utf8Detection::Allow);
 
     let (cow, _, had_errors) = guessed.decode(bytes);
     if !had_errors {
@@ -133,7 +135,7 @@ mod tests {
                 assert_eq!(info.encoding, encoding_rs::UTF_8);
                 assert!(info.had_bom);
             }
-            DetectOutcome::NeedsUserChoice { .. } => panic!("expected Detected"),
+            DetectOutcome::NeedsUserChoice { .. } => panic!("ожидался результат Detected"),
         }
     }
 
@@ -146,7 +148,7 @@ mod tests {
                 assert_eq!(info.encoding, encoding_rs::UTF_8);
                 assert!(!info.had_bom);
             }
-            DetectOutcome::NeedsUserChoice { .. } => panic!("expected Detected"),
+            DetectOutcome::NeedsUserChoice { .. } => panic!("ожидался результат Detected"),
         }
     }
 
